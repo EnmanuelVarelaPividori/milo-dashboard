@@ -1,0 +1,45 @@
+{
+  "name": "milo-dashboard",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "vitest run",
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate deploy",
+    "prisma:dev": "prisma migrate dev",
+    "db:up": "sh -c 'if command -v docker-compose >/dev/null 2>&1; then docker-compose up -d postgres; else docker compose up -d postgres; fi'",
+    "db:down": "sh -c 'if command -v docker-compose >/dev/null 2>&1; then docker-compose stop postgres; else docker compose stop postgres; fi'"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EnmanuelVarelaPividori/milo-dashboard.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/EnmanuelVarelaPividori/milo-dashboard/issues"
+  },
+  "homepage": "https://github.com/EnmanuelVarelaPividori/milo-dashboard#readme",
+  "private": true,
+  "dependencies": {
+    "@prisma/client": "^6.16.2",
+    "dotenv": "^17.4.2",
+    "fastify": "^5.8.5",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "prisma": "^6.16.2",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5"
+  }
+}

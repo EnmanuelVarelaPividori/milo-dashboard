@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: milo-dashboard-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: milo_dashboard
+      POSTGRES_USER: milo
+      POSTGRES_PASSWORD: milo_password
+    ports:
+      - '5432:5432'
+    volumes:
+      - milo_dashboard_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U milo -d milo_dashboard']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    container_name: milo-dashboard-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://milo:milo_password@postgres:5432/milo_dashboard?schema=public
+    ports:
+      - '3000:3000'
+
+volumes:
+  milo_dashboard_postgres_data:
