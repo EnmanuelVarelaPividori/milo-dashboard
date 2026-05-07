@@ -51,6 +51,8 @@ npm run db:up
 npm run migrate:dev
 ```
 
+For the current getting-started deploy, `docker-compose.yml` does not require a checked-in `.env` file on the server.
+
 ## Scripts
 
 - `npm run dev`

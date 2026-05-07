@@ -24,9 +24,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    env_file:
-      - .env
     environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
       DATABASE_URL: postgresql://milo:milo_password@postgres:5432/milo_dashboard
     ports:
       - '3000:3000'
