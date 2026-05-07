@@ -19,6 +19,7 @@ Getting-started base project for Milo.
 - `docker-compose.yml` with PostgreSQL
 - GitHub Actions CI/CD
 - health and readiness endpoints
+- simple SQL migrations runner
 
 ## GitHub PAT
 
@@ -47,6 +48,7 @@ If you want PostgreSQL locally with Docker:
 
 ```bash
 npm run db:up
+npm run migrate:dev
 ```
 
 ## Scripts
@@ -57,12 +59,24 @@ npm run db:up
 - `npm run build`
 - `npm run db:up`
 - `npm run db:down`
+- `npm run migrate:dev`
+- `npm run migrate`
 
 ## Endpoints
 
 - `GET /`
 - `GET /health`
 - `GET /ready`
+
+## Database and migrations
+
+Migrations live in `migrations/*.sql` and are applied through `src/scripts/migrate.ts`.
+
+Current initial migration creates:
+- `schema_migrations`
+- `jobs`
+- `job_runs`
+- `ticket_runs`
 
 ## CI/CD
 
@@ -72,6 +86,7 @@ The workflow:
 - runs tests
 - runs build
 - deploys on tags `v*`
+- app container applies migrations on startup before serving traffic
 
 ### Required GitHub Secrets for deploy
 
