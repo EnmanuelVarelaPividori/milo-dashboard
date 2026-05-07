@@ -1,5 +1,5 @@
 import Fastify from 'fastify';
-import { prisma } from './lib/prisma.js';
+import { checkDbConnection } from './lib/db.js';
 
 export function buildApp() {
   const app = Fastify({ logger: true });
@@ -13,7 +13,7 @@ export function buildApp() {
 
   app.get('/ready', async (_request, reply) => {
     try {
-      await prisma.$queryRaw`SELECT 1`;
+      await checkDbConnection();
       return { status: 'ready' };
     } catch (error) {
       app.log.error({ error }, 'readiness check failed');
