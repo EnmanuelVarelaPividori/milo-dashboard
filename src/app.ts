@@ -18,12 +18,18 @@ import {
   verifySignedToken,
   type AuthUser,
 } from './lib/auth.js';
-import { createPostgresStore, type DashboardStore } from './lib/store.js';
+import { createPostgresStore, type CreateTicketRunInput, type DashboardStore } from './lib/store.js';
+import { createCronJobsService, type CronJobsService } from './services/cron-jobs.js';
+import { buildSessionId, createOpenClawChatService, type ChatService } from './services/chat.js';
 import { renderChatPage, renderDashboardPage, renderLoginPage } from './ui/pages.js';
+
+const CHAT_ENABLED = false;
 
 type BuildAppOptions = {
   store?: DashboardStore;
   dbHealthcheck?: () => Promise<void>;
+  chatService?: ChatService;
+  cronJobsService?: CronJobsService;
 };
 
 const createJobSchema = z.object({
@@ -43,12 +49,44 @@ const createJobRunSchema = z.object({
   data: z.record(z.string(), z.unknown()).optional(),
 });
 
+const createTicketRunSchema = z.object({
+  jobRunId: z.string().uuid().nullable().optional(),
+  jiraKey: z.string().min(1),
+  jiraSummary: z.string().nullable().optional(),
+  jiraStatus: z.string().nullable().optional(),
+  dispatchStatus: z.string().min(1),
+  score: z.number().int().nullable().optional(),
+  branchName: z.string().nullable().optional(),
+  prUrl: z.string().url().nullable().optional(),
+  note: z.string().nullable().optional(),
+  testSummary: z.string().nullable().optional(),
+  finishedAt: z.string().datetime().nullable().optional(),
+  data: z.record(z.string(), z.unknown()).optional(),
+});
+
 const limitQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
 
 const chatBodySchema = z.object({
   message: z.string().min(1).max(4000),
+  conversationId: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/).optional(),
+});
+
+const chatHistoryQuerySchema = z.object({
+  conversationId: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/).optional(),
+});
+
+const renameChatSessionSchema = z.object({
+  title: z.string().trim().min(1).max(80),
+});
+
+const runJobBodySchema = z.object({
+  key: z.string().min(1),
+});
+
+const jobActivityQuerySchema = z.object({
+  key: z.string().min(1),
 });
 
 function getRequestUser(cookieHeader: string | undefined, sessionSecret: string) {
@@ -62,8 +100,17 @@ export function buildApp(options: BuildAppOptions = {}) {
   const app = Fastify({ logger: true });
   const store = options.store ?? createPostgresStore();
   const dbHealthcheck = options.dbHealthcheck ?? checkDbConnection;
+  const chatService = options.chatService ?? createOpenClawChatService();
+  const cronJobsService = options.cronJobsService ?? createCronJobsService();
   const auth = getDiscordAuthConfig();
-  const logoPath = path.join(process.cwd(), 'src', 'ui', 'assets', 'milo_dashboard_white_transparent_smooth.png');
+  const internalIngestToken = process.env.MILO_DASHBOARD_INGEST_TOKEN?.trim() || null;
+  const assetsDir = path.join(process.cwd(), 'src', 'ui', 'assets');
+  const assetFiles = new Map([
+    ['/assets/milo-dashboard-logo.png', { file: 'milo_dashboard_white_transparent_smooth.png', type: 'image/png' }],
+    ['/assets/milo-dashboard-logo-126.webp', { file: 'milo_dashboard_white_transparent_smooth_126.webp', type: 'image/webp' }],
+    ['/assets/milo-dashboard-logo-252.webp', { file: 'milo_dashboard_white_transparent_smooth_252.webp', type: 'image/webp' }],
+  ]);
+  const assetCache = new Map<string, Buffer>();
 
   function setSessionCookie(reply: { header: (name: string, value: string | string[]) => void }, user: AuthUser) {
     const token = createSignedToken(user, auth.sessionSecret);
@@ -76,6 +123,35 @@ export function buildApp(options: BuildAppOptions = {}) {
       }),
     );
   }
+
+  async function syncCronJobsIntoStore() {
+    try {
+      const jobs = await cronJobsService.listJobs();
+      await store.syncJobs(jobs);
+    } catch (error) {
+      app.log.error({ error }, 'failed to sync cron jobs into dashboard store');
+    }
+  }
+
+  function getCronSourceIdFromKey(key: string) {
+    return key.startsWith('cron:') ? key.slice('cron:'.length) : null;
+  }
+
+  function isLoopbackIp(ip: string | undefined) {
+    if (!ip) return false;
+    return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+  }
+
+  function isAuthorizedInternalIngest(request: { ip?: string; headers: Record<string, string | string[] | undefined> }) {
+    if (isLoopbackIp(request.ip)) return true;
+    if (!internalIngestToken) return false;
+    const token = request.headers['x-milo-dashboard-ingest-token'];
+    return typeof token === 'string' && token === internalIngestToken;
+  }
+
+  app.addHook('onReady', async () => {
+    await syncCronJobsIntoStore();
+  });
 
   function clearSessionCookie(reply: { header: (name: string, value: string | string[]) => void }) {
     reply.header(
@@ -131,15 +207,22 @@ export function buildApp(options: BuildAppOptions = {}) {
     return user;
   }
 
-  app.get('/assets/milo-dashboard-logo.png', async (_request, reply) => {
-    try {
-      const file = await readFile(logoPath);
-      return reply.type('image/png').send(file);
-    } catch (error) {
-      app.log.error({ error }, 'failed to read logo asset');
-      return reply.status(404).send({ error: 'asset_not_found' });
-    }
-  });
+  for (const [route, asset] of assetFiles.entries()) {
+    app.get(route, async (_request, reply) => {
+      try {
+        let file = assetCache.get(route);
+        if (!file) {
+          file = await readFile(path.join(assetsDir, asset.file));
+          assetCache.set(route, file);
+        }
+        reply.header('Cache-Control', 'public, max-age=31536000, immutable');
+        return reply.type(asset.type).send(file);
+      } catch (error) {
+        app.log.error({ error, route }, 'failed to read logo asset');
+        return reply.status(404).send({ error: 'asset_not_found' });
+      }
+    });
+  }
 
   app.get('/', async (request, reply) => {
     const user = await ensurePageUser(request, reply);
@@ -160,8 +243,10 @@ export function buildApp(options: BuildAppOptions = {}) {
   app.get('/chat', async (request, reply) => {
     const user = await ensurePageUser(request, reply);
     if (user === undefined) return reply;
+    if (!CHAT_ENABLED) return reply.redirect('/?chat=disabled');
 
-    return reply.type('text/html; charset=utf-8').send(renderChatPage(user));
+    const query = request.query as { prefill?: string };
+    return reply.type('text/html; charset=utf-8').send(renderChatPage(user, { prefill: query.prefill ?? '' }));
   });
 
   app.get('/auth/discord/login', async (_request, reply) => {
@@ -215,7 +300,7 @@ export function buildApp(options: BuildAppOptions = {}) {
     service: 'milo-dashboard',
     status: 'ok',
     auth: { discordOauthEnabled: auth.enabled, roles: ['admin', 'developer'] },
-    endpoints: ['/', '/login', '/chat', '/auth/discord/login', '/api/dashboard', '/api/chat', '/api/me'],
+    endpoints: ['/', '/login', '/auth/discord/login', '/api/dashboard', '/api/me'],
   }));
 
   app.get('/api/me', async (request, reply) => {
@@ -250,6 +335,35 @@ export function buildApp(options: BuildAppOptions = {}) {
 
     const jobs = await store.listJobs();
     return { data: jobs };
+  });
+
+  app.post('/api/jobs/sync', async (request, reply) => {
+    const user = await ensureApiUser(request, reply);
+    if (user === undefined) return reply;
+
+    await syncCronJobsIntoStore();
+    const jobs = await store.listJobs();
+    return { data: jobs };
+  });
+
+  app.post('/api/jobs/run', async (request, reply) => {
+    const user = await ensureApiUser(request, reply);
+    if (user === undefined) return reply;
+
+    const parsed = runJobBodySchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: 'invalid_body', details: parsed.error.flatten() });
+
+    const sourceId = getCronSourceIdFromKey(parsed.data.key);
+    if (!sourceId) return reply.status(400).send({ error: 'job_not_runnable' });
+
+    try {
+      const result = await cronJobsService.runJob(sourceId);
+      await syncCronJobsIntoStore();
+      return { data: result };
+    } catch (error) {
+      app.log.error({ error, key: parsed.data.key, userId: user.id }, 'manual cron job run failed');
+      return reply.status(502).send({ error: 'job_run_failed' });
+    }
   });
 
   app.post('/api/jobs', async (request, reply) => {
@@ -308,15 +422,167 @@ export function buildApp(options: BuildAppOptions = {}) {
     return { data: runs };
   });
 
+  app.post('/api/internal/ticket-runs', async (request, reply) => {
+    if (!isAuthorizedInternalIngest(request)) {
+      return reply.status(401).send({ error: 'unauthorized' });
+    }
+
+    const parsed = createTicketRunSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: 'invalid_body', details: parsed.error.flatten() });
+
+    try {
+      const run = await store.createTicketRun(parsed.data as CreateTicketRunInput);
+      return reply.status(201).send({ data: run });
+    } catch (error) {
+      app.log.error({ error }, 'failed to create internal ticket run');
+      return reply.status(500).send({ error: 'failed_to_create_ticket_run' });
+    }
+  });
+
+  app.get('/api/jobs/activity', async (request, reply) => {
+    const user = await ensureApiUser(request, reply);
+    if (user === undefined) return reply;
+
+    const parsed = jobActivityQuerySchema.safeParse(request.query);
+    if (!parsed.success) return reply.status(400).send({ error: 'invalid_query', details: parsed.error.flatten() });
+
+    await syncCronJobsIntoStore();
+    const jobs = await store.listJobs();
+    const job = jobs.find((item) => item.key === parsed.data.key);
+    if (!job) return reply.status(404).send({ error: 'job_not_found' });
+
+    const sourceId = getCronSourceIdFromKey(job.key);
+    const [liveRuns, ticketRuns] = await Promise.all([
+      sourceId ? cronJobsService.listRuns(sourceId, 12) : Promise.resolve([]),
+      store.listTicketRunsForJob(job.key, job.name, 20),
+    ]);
+
+    return { data: { job, liveRuns, ticketRuns } };
+  });
+
+  app.get('/api/ticket-runs/activity', async (request, reply) => {
+    const user = await ensureApiUser(request, reply);
+    if (user === undefined) return reply;
+
+    const parsed = z.object({ jiraKey: z.string().min(1) }).safeParse(request.query);
+    if (!parsed.success) return reply.status(400).send({ error: 'invalid_query', details: parsed.error.flatten() });
+
+    const ticketRuns = await store.listTicketRunsByJiraKey(parsed.data.jiraKey, 20);
+    const jobRunIds = [...new Set(ticketRuns.map((item) => item.jobRunId).filter((value): value is string => Boolean(value)))];
+    const jobRuns = await store.listJobRunsByIds(jobRunIds);
+    return { data: { jiraKey: parsed.data.jiraKey, ticketRuns, jobRuns } };
+  });
+
+  app.get('/api/chat/history', async (request, reply) => {
+    const user = await ensureApiUser(request, reply);
+    if (user === undefined) return reply;
+    if (!CHAT_ENABLED) return reply.status(503).send({ error: 'chat_disabled' });
+
+    const parsed = chatHistoryQuerySchema.safeParse(request.query);
+    if (!parsed.success) return reply.status(400).send({ error: 'invalid_query', details: parsed.error.flatten() });
+
+    const sessionKey = buildSessionId(user.id, parsed.data.conversationId);
+    const messages = await store.listChatMessages(sessionKey, 100);
+    return { data: { messages } };
+  });
+
+  app.get('/api/chat/bootstrap', async (request, reply) => {
+    const user = await ensureApiUser(request, reply);
+    if (user === undefined) return reply;
+    if (!CHAT_ENABLED) return reply.status(503).send({ error: 'chat_disabled' });
+
+    const parsed = chatHistoryQuerySchema.safeParse(request.query);
+    if (!parsed.success) return reply.status(400).send({ error: 'invalid_query', details: parsed.error.flatten() });
+
+    const sessionKey = buildSessionId(user.id, parsed.data.conversationId);
+    const [sessions, messages] = await Promise.all([
+      store.listChatSessions(user.id, 100),
+      store.listChatMessages(sessionKey, 100),
+    ]);
+
+    return { data: { sessions, messages } };
+  });
+
+  app.get('/api/chat/sessions', async (request, reply) => {
+    const user = await ensureApiUser(request, reply);
+    if (user === undefined) return reply;
+    if (!CHAT_ENABLED) return reply.status(503).send({ error: 'chat_disabled' });
+
+    const sessions = await store.listChatSessions(user.id, 100);
+    return { data: { sessions } };
+  });
+
+  app.patch('/api/chat/sessions/:conversationId', async (request, reply) => {
+    const user = await ensureApiUser(request, reply);
+    if (user === undefined) return reply;
+    if (!CHAT_ENABLED) return reply.status(503).send({ error: 'chat_disabled' });
+
+    const params = z.object({ conversationId: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/) }).safeParse(request.params);
+    if (!params.success) return reply.status(400).send({ error: 'invalid_params', details: params.error.flatten() });
+
+    const parsed = renameChatSessionSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: 'invalid_body', details: parsed.error.flatten() });
+
+    const session = await store.renameChatSession({
+      sessionKey: buildSessionId(user.id, params.data.conversationId),
+      userId: user.id,
+      title: parsed.data.title,
+    });
+
+    if (!session) return reply.status(404).send({ error: 'not_found' });
+    return { data: { session } };
+  });
+
+  app.delete('/api/chat/sessions/:conversationId', async (request, reply) => {
+    const user = await ensureApiUser(request, reply);
+    if (user === undefined) return reply;
+    if (!CHAT_ENABLED) return reply.status(503).send({ error: 'chat_disabled' });
+
+    const params = z.object({ conversationId: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/) }).safeParse(request.params);
+    if (!params.success) return reply.status(400).send({ error: 'invalid_params', details: params.error.flatten() });
+
+    const deleted = await store.deleteChatSession({
+      sessionKey: buildSessionId(user.id, params.data.conversationId),
+      userId: user.id,
+    });
+
+    if (!deleted) return reply.status(404).send({ error: 'not_found' });
+    return { data: { deleted: true } };
+  });
+
   app.post('/api/chat', async (request, reply) => {
     const user = await ensureApiUser(request, reply);
     if (user === undefined) return reply;
+    if (!CHAT_ENABLED) return reply.status(503).send({ error: 'chat_disabled' });
 
     const parsed = chatBodySchema.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: 'invalid_body', details: parsed.error.flatten() });
 
-    const replyText = `Recibido, ${user.displayName}. Este chat web ya está protegido con Discord OAuth y tu rol es ${user.role}. Por ahora la respuesta es placeholder hasta conectarlo con Milo real. Tu mensaje fue: "${parsed.data.message}".`;
-    return { data: { reply: replyText } };
+    const sessionKey = buildSessionId(user.id, parsed.data.conversationId);
+
+    try {
+      await store.createChatMessage({
+        sessionKey,
+        userId: user.id,
+        role: 'user',
+        content: parsed.data.message,
+      });
+
+      const result = await chatService.sendMessage({ user, message: parsed.data.message, conversationId: parsed.data.conversationId });
+
+      await store.createChatMessage({
+        sessionKey,
+        userId: user.id,
+        role: 'assistant',
+        content: result.reply,
+        meta: result.meta,
+      });
+
+      return { data: result };
+    } catch (error) {
+      app.log.error({ error, userId: user.id }, 'chat service failed');
+      return reply.status(502).send({ error: 'chat_backend_failed' });
+    }
   });
 
   return app;

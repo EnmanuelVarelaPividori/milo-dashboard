@@ -2,6 +2,10 @@ import type { AuthUser } from '../lib/auth.js';
 import type { DashboardNotification, DashboardSummary, Job, TicketRun } from '../lib/store.js';
 import { escapeHtml } from './html.js';
 
+function truncateText(value: string, maxLength = 180) {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 3).trimEnd()}...` : value;
+}
+
 export function renderTopbar(user: AuthUser | null, current: 'dashboard' | 'chat' | 'login') {
   const navLinks = user
     ? `
@@ -10,7 +14,6 @@ export function renderTopbar(user: AuthUser | null, current: 'dashboard' | 'chat
       </div>
       <div class="nav-group">
         <a class="nav-link ${current === 'dashboard' ? 'active' : ''}" href="/">Dashboard</a>
-        <a class="nav-link ${current === 'chat' ? 'active' : ''}" href="/chat">Chat</a>
         <div class="profile-menu">
           <button class="profile-summary dropdown-button" type="button" aria-haspopup="menu" aria-expanded="false">
             <span class="profile-name">${escapeHtml(user.displayName)}</span>
@@ -28,9 +31,8 @@ export function renderTopbar(user: AuthUser | null, current: 'dashboard' | 'chat
 
   return `
     <header class="shell topbar">
-      <a class="brand" href="/">
-        <span class="brand-badge"><img src="/assets/milo-dashboard-logo.png" alt="Milo logo" /></span>
-        <span>Milo Dashboard</span>
+      <a class="brand" href="/" aria-label="Milo Dashboard">
+        <span class="brand-text">Milo Dashboard</span>
       </a>
       <nav class="nav">${navLinks}</nav>
     </header>
@@ -72,16 +74,38 @@ export function renderJobsRows(jobs: Job[]) {
   return jobs.length
     ? jobs
         .map(
-          (job) => `
-            <tr>
-              <td>${escapeHtml(job.name)}</td>
+          (job) => {
+            const prefill = encodeURIComponent(`Quiero preguntarte por el job ${job.name} (${job.key}).`);
+            const statusLabel = job.runningAt
+              ? 'Corriendo'
+              : job.lastStatus
+                ? job.lastStatus
+                : 'Sin datos';
+            const statusClass = job.runningAt
+              ? 'running'
+              : job.lastStatus && ['ok', 'success', 'completed', 'done'].includes(job.lastStatus.toLowerCase())
+                ? 'ok'
+                : job.lastStatus && ['error', 'failed', 'cancelled'].includes(job.lastStatus.toLowerCase())
+                  ? 'error'
+                  : 'idle';
+            return `
+            <tr data-job-key="${escapeHtml(job.key)}">
+              <td class="job-name-cell">${escapeHtml(job.name)}</td>
               <td><code>${escapeHtml(job.key)}</code></td>
-              <td>${job.enabled ? 'Activo' : 'Pausado'}</td>
-              <td>${job.nextRunAt ? escapeHtml(new Date(job.nextRunAt).toLocaleString('es-AR')) : '—'}</td>
-            </tr>`,
+              <td class="job-enabled-cell">${job.enabled ? 'Activo' : 'Pausado'}</td>
+              <td class="job-status-cell"><span class="job-status-badge ${statusClass}">${escapeHtml(statusLabel)}</span></td>
+              <td class="job-next-run-cell">${job.nextRunAt ? escapeHtml(new Date(job.nextRunAt).toLocaleString('es-AR')) : '—'}</td>
+              <td>
+                <div class="job-actions">
+                  <button class="ghost-button job-run-button" type="button" data-job-key="${escapeHtml(job.key)}" ${job.key.startsWith('cron:') ? '' : 'disabled'}>Correr ahora</button>
+                  <button class="ghost-button job-activity-button" type="button" data-job-key="${escapeHtml(job.key)}">Ver actividad</button>
+                </div>
+              </td>
+            </tr>`;
+          },
         )
         .join('')
-    : '<tr><td colspan="4" class="empty">Todavía no hay jobs cargados.</td></tr>';
+    : '<tr><td colspan="6" class="empty">Todavía no hay jobs cargados.</td></tr>';
 }
 
 export function renderTicketRows(ticketRuns: TicketRun[]) {
@@ -89,8 +113,8 @@ export function renderTicketRows(ticketRuns: TicketRun[]) {
     ? ticketRuns
         .map(
           (ticket) => `
-            <tr>
-              <td>${escapeHtml(ticket.jiraKey)}</td>
+            <tr class="ticket-row" data-ticket-key="${escapeHtml(ticket.jiraKey)}">
+              <td><button class="link-button ticket-detail-button" type="button" data-ticket-key="${escapeHtml(ticket.jiraKey)}">${escapeHtml(ticket.jiraKey)}</button></td>
               <td>${escapeHtml(ticket.jiraSummary ?? 'Sin resumen')}</td>
               <td>${escapeHtml(ticket.dispatchStatus)}</td>
               <td>${ticket.branchName ? `<code>${escapeHtml(ticket.branchName)}</code>` : '—'}</td>
@@ -105,10 +129,10 @@ export function renderNotifications(notifications: DashboardNotification[]) {
     ? notifications
         .map(
           (notification) => `
-            <li class="notification ${escapeHtml(notification.severity)}">
+            <li class="notification ${escapeHtml(notification.severity)} ${notification.type === 'ticket_run' ? 'clickable' : ''}" ${notification.type === 'ticket_run' ? `data-ticket-key="${escapeHtml(notification.title)}"` : ''}>
               <div>
                 <strong>${escapeHtml(notification.title)}</strong>
-                <p>${escapeHtml(notification.detail)}</p>
+                <p>${escapeHtml(truncateText(notification.detail))}</p>
               </div>
               <span>${escapeHtml(new Date(notification.occurredAt).toLocaleString('es-AR'))}</span>
             </li>`,
