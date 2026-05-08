@@ -1,4 +1,6 @@
 import Fastify from 'fastify';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { z } from 'zod';
 import { checkDbConnection } from './lib/db.js';
 import {
@@ -61,6 +63,7 @@ export function buildApp(options: BuildAppOptions = {}) {
   const store = options.store ?? createPostgresStore();
   const dbHealthcheck = options.dbHealthcheck ?? checkDbConnection;
   const auth = getDiscordAuthConfig();
+  const logoPath = path.join(process.cwd(), 'src', 'ui', 'assets', 'milo_dashboard_white_transparent_smooth.png');
 
   function setSessionCookie(reply: { header: (name: string, value: string | string[]) => void }, user: AuthUser) {
     const token = createSignedToken(user, auth.sessionSecret);
@@ -127,6 +130,16 @@ export function buildApp(options: BuildAppOptions = {}) {
     }
     return user;
   }
+
+  app.get('/assets/milo-dashboard-logo.png', async (_request, reply) => {
+    try {
+      const file = await readFile(logoPath);
+      return reply.type('image/png').send(file);
+    } catch (error) {
+      app.log.error({ error }, 'failed to read logo asset');
+      return reply.status(404).send({ error: 'asset_not_found' });
+    }
+  });
 
   app.get('/', async (request, reply) => {
     const user = await ensurePageUser(request, reply);

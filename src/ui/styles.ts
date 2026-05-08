@@ -40,13 +40,22 @@ export const appStyles = `
     text-decoration: none;
   }
   .brand-badge {
-    width: 32px;
-    height: 32px;
+    width: 34px;
+    height: 34px;
     border-radius: 10px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    background: linear-gradient(135deg, #2563eb, #7c3aed);
+    background: rgba(15, 23, 42, 0.7);
+    border: 1px solid var(--line);
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+  .brand-badge img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
   }
   .nav {
     display: flex;

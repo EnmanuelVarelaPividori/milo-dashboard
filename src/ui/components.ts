@@ -6,11 +6,11 @@ export function renderTopbar(user: AuthUser | null, current: 'dashboard' | 'chat
   const navLinks = user
     ? `
       <div class="nav-group primary">
-        <a class="nav-link ${current === 'dashboard' ? 'active' : ''}" href="/">Dashboard</a>
-        <a class="nav-link ${current === 'chat' ? 'active' : ''}" href="/chat">Chat</a>
+        ${renderIntegrationPanel()}
       </div>
       <div class="nav-group">
-        ${renderIntegrationPanel()}
+        <a class="nav-link ${current === 'dashboard' ? 'active' : ''}" href="/">Dashboard</a>
+        <a class="nav-link ${current === 'chat' ? 'active' : ''}" href="/chat">Chat</a>
         <div class="profile-menu">
           <button class="profile-summary dropdown-button" type="button" aria-haspopup="menu" aria-expanded="false">
             <span class="profile-name">${escapeHtml(user.displayName)}</span>
@@ -29,7 +29,7 @@ export function renderTopbar(user: AuthUser | null, current: 'dashboard' | 'chat
   return `
     <header class="shell topbar">
       <a class="brand" href="/">
-        <span class="brand-badge">🦉</span>
+        <span class="brand-badge"><img src="/assets/milo-dashboard-logo.png" alt="Milo logo" /></span>
         <span>Milo Dashboard</span>
       </a>
       <nav class="nav">${navLinks}</nav>
