@@ -20,6 +20,8 @@ Getting-started base project for Milo.
 - GitHub Actions CI/CD
 - health and readiness endpoints
 - simple SQL migrations runner
+- Discord OAuth login scaffold with whitelist + roles (`admin`, `developer`)
+- protected web chat UI scaffold (`/chat`)
 
 ## GitHub PAT
 
@@ -67,8 +69,34 @@ For the current getting-started deploy, `docker-compose.yml` does not require a 
 ## Endpoints
 
 - `GET /`
+- `GET /login`
+- `GET /chat`
+- `GET /auth/discord/login`
+- `GET /auth/discord/callback`
 - `GET /health`
 - `GET /ready`
+- `GET /api/me`
+- `POST /api/chat`
+
+## Discord OAuth config
+
+Set these env vars:
+
+- `BASE_URL`
+- `DISCORD_CLIENT_ID`
+- `DISCORD_CLIENT_SECRET`
+- `SESSION_SECRET`
+- `DISCORD_ADMIN_IDS`
+- `DISCORD_DEVELOPER_IDS`
+
+Suggested Discord OAuth callback URL:
+
+- `<BASE_URL>/auth/discord/callback`
+
+Whitelist/roles work by Discord user ID:
+
+- IDs in `DISCORD_ADMIN_IDS` => `admin`
+- IDs in `DISCORD_DEVELOPER_IDS` => `developer`
 
 ## Database and migrations
 

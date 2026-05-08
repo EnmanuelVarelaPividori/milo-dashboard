@@ -1,11 +1,49 @@
 import { describe, expect, it } from 'vitest';
 import { buildApp } from './app.js';
-import type { DashboardStore, Job, JobRun, TicketRun } from './lib/store.js';
+import { createSignedToken, getSessionCookieName, type AuthUser } from './lib/auth.js';
+import type { DashboardStore, DashboardSummary, Job, JobRun, TicketRun } from './lib/store.js';
+
+process.env.SESSION_SECRET = 'test-session-secret';
+
+function createAuthCookie() {
+  const user: AuthUser = {
+    id: '429876165121933312',
+    username: 'daymus11',
+    displayName: 'Manu',
+    avatarUrl: null,
+    role: 'admin',
+  };
+
+  const token = createSignedToken(user, process.env.SESSION_SECRET!);
+  return `${getSessionCookieName()}=${encodeURIComponent(token)}`;
+}
 
 function createMockStore(): DashboardStore {
   const jobs: Job[] = [];
   const jobRuns: JobRun[] = [];
   const ticketRuns: TicketRun[] = [];
+
+  const getDashboardSummary = async (): Promise<DashboardSummary> => {
+    const ticketsTaken = ticketRuns.length;
+    const ticketsSucceeded = ticketRuns.filter((item) => item.dispatchStatus === 'success').length;
+    const ticketsFailed = ticketRuns.filter((item) => item.dispatchStatus === 'failed').length;
+
+    return {
+      totals: {
+        jobs: jobs.length,
+        activeJobs: jobs.filter((item) => item.enabled).length,
+        jobRuns: jobRuns.length,
+        failedJobRuns: jobRuns.filter((item) => item.status === 'failed').length,
+        ticketsTaken,
+        ticketsSucceeded,
+        ticketsFailed,
+        successRate: ticketsTaken === 0 ? 0 : Math.round((ticketsSucceeded / ticketsTaken) * 100),
+      },
+      recentNotifications: [],
+      recentJobs: jobs.slice(0, 6),
+      recentTicketRuns: ticketRuns.slice(0, 8),
+    };
+  };
 
   return {
     async listJobs() {
@@ -48,6 +86,7 @@ function createMockStore(): DashboardStore {
     async listTicketRuns() {
       return ticketRuns;
     },
+    getDashboardSummary,
   };
 }
 
@@ -62,9 +101,29 @@ describe('app', () => {
     await app.close();
   });
 
-  it('returns service info', async () => {
+  it('redirects dashboard home to login when not authenticated', async () => {
     const app = buildApp({ store: createMockStore(), dbHealthcheck: async () => {} });
     const response = await app.inject({ method: 'GET', url: '/' });
+
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('/login');
+
+    await app.close();
+  });
+
+  it('redirects chat page to login when not authenticated', async () => {
+    const app = buildApp({ store: createMockStore(), dbHealthcheck: async () => {} });
+    const response = await app.inject({ method: 'GET', url: '/chat' });
+
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('/login');
+
+    await app.close();
+  });
+
+  it('returns api service info', async () => {
+    const app = buildApp({ store: createMockStore(), dbHealthcheck: async () => {} });
+    const response = await app.inject({ method: 'GET', url: '/api' });
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ service: 'milo-dashboard', status: 'ok' });
@@ -75,9 +134,12 @@ describe('app', () => {
   it('creates and lists jobs', async () => {
     const app = buildApp({ store: createMockStore(), dbHealthcheck: async () => {} });
 
+    const cookie = createAuthCookie();
+
     const createResponse = await app.inject({
       method: 'POST',
       url: '/api/jobs',
+      headers: { cookie },
       payload: {
         key: 'milo-dispatch',
         name: 'Milo dispatch',
@@ -88,7 +150,7 @@ describe('app', () => {
     expect(createResponse.statusCode).toBe(201);
     expect(createResponse.json().data.key).toBe('milo-dispatch');
 
-    const listResponse = await app.inject({ method: 'GET', url: '/api/jobs' });
+    const listResponse = await app.inject({ method: 'GET', url: '/api/jobs', headers: { cookie } });
     expect(listResponse.statusCode).toBe(200);
     expect(listResponse.json().data).toHaveLength(1);
 
@@ -98,9 +160,12 @@ describe('app', () => {
   it('creates a job run for an existing job', async () => {
     const app = buildApp({ store: createMockStore(), dbHealthcheck: async () => {} });
 
+    const cookie = createAuthCookie();
+
     await app.inject({
       method: 'POST',
       url: '/api/jobs',
+      headers: { cookie },
       payload: {
         key: 'milo-dispatch',
         name: 'Milo dispatch',
@@ -111,6 +176,7 @@ describe('app', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/job-runs',
+      headers: { cookie },
       payload: {
         jobKey: 'milo-dispatch',
         status: 'success',
@@ -121,9 +187,33 @@ describe('app', () => {
     expect(response.statusCode).toBe(201);
     expect(response.json().data.status).toBe('success');
 
-    const listResponse = await app.inject({ method: 'GET', url: '/api/job-runs' });
+    const listResponse = await app.inject({ method: 'GET', url: '/api/job-runs', headers: { cookie } });
     expect(listResponse.statusCode).toBe(200);
     expect(listResponse.json().data).toHaveLength(1);
+
+    await app.close();
+  });
+
+  it('requires auth for dashboard api', async () => {
+    const app = buildApp({ store: createMockStore(), dbHealthcheck: async () => {} });
+    const response = await app.inject({ method: 'GET', url: '/api/dashboard' });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({ error: 'unauthorized' });
+
+    await app.close();
+  });
+
+  it('requires auth for chat api', async () => {
+    const app = buildApp({ store: createMockStore(), dbHealthcheck: async () => {} });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/chat',
+      payload: { message: 'hola milo' },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({ error: 'unauthorized' });
 
     await app.close();
   });
